@@ -1,0 +1,12 @@
+Suggested NL questions to test (based on actual distinct values):
+
+1) How many hours did Akash Brar work in January 2025?
+2) Who worked on Tiny Boards LP on January 2nd 2025?
+3) List the top 5 clients by total time in March 2025.
+4) How many hours were logged for Client 'VSBLTY Groupe Technologies Corp.' in 2025?
+5) Who did bookkeeping work for Neotech Metals Corp. (formerly Caravan) in February 2025?
+6) How many hours did Payroll Specialist Danielle Mananzan log in January 2025?
+7) List distinct task types for Treewalk (Internal) in April 2025.
+8) Show me 5 most recent entries for Zefiro Methane Corp.
+9) Top 10 team members by hours in 2025.
+10) How many hours of 'Treewalk: Administration' happened in January 2025?
