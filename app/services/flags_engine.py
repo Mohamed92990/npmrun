@@ -6,7 +6,8 @@ from datetime import date
 from app.services.postgres_client import PostgresClient, load_pg_conn_info
 from app.services import rules_config as rc
 
-VIEW = "public.karbon_timesheets_typed"
+# Use the raw landing table directly to avoid dependence on typed views.
+TABLE = "public.karbon_timesheets"
 
 
 def _ilike_any(col: str, keywords: list[str], params: list) -> str:
@@ -40,10 +41,10 @@ def run_weekly_flags(*, from_ymd: str, to_ymd: str, limit: int = 50) -> dict:
         # --- Fee type mismatch (row-level)
         cur.execute(
             f"""
-            SELECT date_ts::date, team_member, client, work, task_type, fee_type, COALESCE(time_minutes,0)
-            FROM {VIEW}
-            WHERE date_ts >= %s::timestamptz AND date_ts < %s::timestamptz
-              AND client IS NOT NULL AND fee_type IS NOT NULL
+            SELECT "Date"::date, "Team Member", "Client", "Work", "Task Type", "Fee Type", COALESCE(NULLIF("Time (Minutes)", ''), '0')::numeric
+            FROM {TABLE}
+            WHERE "Date"::date >= %s::date AND "Date"::date < %s::date
+              AND "Client" IS NOT NULL AND "Fee Type" IS NOT NULL
             """,
             [from_ymd, to_ymd],
         )
@@ -74,21 +75,21 @@ def run_weekly_flags(*, from_ymd: str, to_ymd: str, limit: int = 50) -> dict:
 
         # --- TW task booked to clients (row-level)
         params: list = [from_ymd, to_ymd]
-        tw_task_clause = _ilike_any("task_type", rc.TW_TASK_KEYWORDS, params)
-        tw_client_clause = _ilike_any("client", rc.TREEWALK_CLIENT_KEYWORDS, params)
+        tw_task_clause = _ilike_any('"Task Type"', rc.TW_TASK_KEYWORDS, params)
+        tw_client_clause = _ilike_any('"Client"', rc.TREEWALK_CLIENT_KEYWORDS, params)
 
         cur.execute(
             f"""
-            SELECT date_ts::date, team_member, client, work, task_type, fee_type, COALESCE(time_minutes,0)
-            FROM {VIEW}
-            WHERE date_ts >= %s::timestamptz AND date_ts < %s::timestamptz
-              AND task_type IS NOT NULL
-              AND client IS NOT NULL
+            SELECT "Date"::date, "Team Member", "Client", "Work", "Task Type", "Fee Type", COALESCE(NULLIF("Time (Minutes)", ''), '0')::numeric
+            FROM {TABLE}
+            WHERE "Date"::date >= %s::date AND "Date"::date < %s::date
+              AND "Task Type" IS NOT NULL
+              AND "Client" IS NOT NULL
               AND (
                     ({tw_task_clause} AND NOT {tw_client_clause})
                  OR (NOT {tw_task_clause} AND {tw_client_clause})
               )
-            ORDER BY date_ts DESC
+            ORDER BY "Date" DESC
             LIMIT %s
             """,
             params + [limit],
@@ -128,17 +129,16 @@ def run_weekly_flags(*, from_ymd: str, to_ymd: str, limit: int = 50) -> dict:
         # Determine which stat holidays fall inside the range.
         stat_days = [d for d in rc.BC_STAT_HOLIDAYS if from_ymd <= d < to_ymd]
         if stat_days:
-            params = [from_ymd, to_ymd]
-            # PTO-coded row predicate across task_type/work/notes
+            # PTO-coded row predicate across Task Type/Work/Notes
             pto_params: list = []
             pto_clause = "(" + " OR ".join(
                 [
-                    _ilike_any("task_type", rc.PTO_KEYWORDS, pto_params),
-                    _ilike_any("work", rc.PTO_KEYWORDS, pto_params),
-                    _ilike_any("notes", rc.PTO_KEYWORDS, pto_params),
+                    _ilike_any('"Task Type"', rc.PTO_KEYWORDS, pto_params),
+                    _ilike_any('"Work"', rc.PTO_KEYWORDS, pto_params),
+                    _ilike_any('"Notes"', rc.PTO_KEYWORDS, pto_params),
                 ]
             ) + ")"
-            # Build VALUES list for stat days
+
             values_sql = ",".join(["(%s::date)" for _ in stat_days])
 
             cur.execute(
@@ -147,14 +147,14 @@ def run_weekly_flags(*, from_ymd: str, to_ymd: str, limit: int = 50) -> dict:
                 per_person_day AS (
                     SELECT
                       sd.d AS day,
-                      t.team_member,
-                      SUM(CASE WHEN {pto_clause} THEN COALESCE(t.time_minutes,0) ELSE 0 END) AS pto_minutes,
-                      SUM(CASE WHEN {pto_clause} THEN 0 ELSE COALESCE(t.time_minutes,0) END) AS work_minutes
+                      t."Team Member" AS team_member,
+                      SUM(CASE WHEN {pto_clause} THEN COALESCE(NULLIF(t."Time (Minutes)", ''), '0')::numeric ELSE 0 END) AS pto_minutes,
+                      SUM(CASE WHEN {pto_clause} THEN 0 ELSE COALESCE(NULLIF(t."Time (Minutes)", ''), '0')::numeric END) AS work_minutes
                     FROM stat_days sd
-                    LEFT JOIN {VIEW} t
-                      ON t.date_ts::date = sd.d
-                     AND t.date_ts >= %s::timestamptz AND t.date_ts < %s::timestamptz
-                    GROUP BY sd.d, t.team_member
+                    LEFT JOIN {TABLE} t
+                      ON t."Date"::date = sd.d
+                     AND t."Date"::date >= %s::date AND t."Date"::date < %s::date
+                    GROUP BY sd.d, t."Team Member"
                 )
                 SELECT day, team_member, pto_minutes, work_minutes
                 FROM per_person_day
