@@ -15,7 +15,7 @@ SYSTEM = (
 )
 
 SCHEMA_HINT = {
-    "op": "sum | distinct | group_sum | top | list",
+    "op": "sum | distinct | group_sum | top | bottom | list",
     "metric": "time_minutes | cost (required for sum, group_sum, top)",
     "group_by": "Team_Member | Client | Work | Role | Task_Type | Fee_Type | Month (required for group_sum, top, distinct)",
     "fields": "array of field names for list (optional)",
@@ -35,9 +35,10 @@ RULES = """
   - Total/sum of hours (one number): op='sum'. Use for "how many hours", "total time", "billable hours for X", "non-billable hours for Y".
   - Breakdown/split by dimension: op='group_sum' with group_by set (e.g. Client, Work, Month, Team_Member). Use for "breakdown by client", "hours per project", "by month", "by person".
   - Top N / highest / most: op='top' with group_by and limit (e.g. "client with highest hours" -> group_by='Client', limit=1).
+  - Bottom N / lowest / least: op='bottom' with group_by and limit (e.g. "staff with least hours" -> group_by='Team_Member', limit=1).
   - Who / which distinct values: op='distinct' with group_by (e.g. "who worked" -> group_by='Team_Member').
   - Raw rows/entries: op='list' when user wants to see individual records (with filters and limit).
-- Always set metric='time_minutes' for hours-related questions (sum, group_sum, top).
+- Always set metric='time_minutes' for hours-related questions (sum, group_sum, top, bottom).
 - Date range: For "in January 2025", "Q1 2025", "this time period" (if year/month stated), set from_ymd and to_ymd (end exclusive). If only month name, backend can infer year.
 - person: Set when user names a team member (e.g. "John's hours", "breakdown for Jane").
 - client: Set to exact client/company name when mentioned (e.g. "for Acme Corp", "Atomic Development Inc.").
@@ -65,6 +66,8 @@ EXAMPLES = [
      '{"op":"sum","metric":"time_minutes","client":"Atomic Development","fee_type":"Billable","from_ymd":"2025-01-01","to_ymd":"2025-04-01"}'),
     ('Who had the most non-billable hours in January 2025?',
      '{"op":"top","metric":"time_minutes","group_by":"Team_Member","fee_type":"Non-Billable","from_ymd":"2025-01-01","to_ymd":"2025-02-01","limit":1}'),
+    ('Who had the least hours in February 2025?',
+     '{"op":"bottom","metric":"time_minutes","group_by":"Team_Member","from_ymd":"2025-02-01","to_ymd":"2025-03-01","limit":1}'),
     ('Hours per project for Sarah at Bayridge in February 2025',
      '{"op":"group_sum","metric":"time_minutes","group_by":"Work","person":"Sarah","client":"Bayridge","from_ymd":"2025-02-01","to_ymd":"2025-03-01","limit":50}'),
     ('Show me the top 10 team members by hours in 2025',

@@ -217,7 +217,7 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
 
             return {"reply": reply, "diagnostics": {"matched": matched, "count": len(vals)}}
 
-        if plan.op in ("group_sum", "top"):
+        if plan.op in ("group_sum", "top", "bottom"):
             gb = plan.group_by or "Client"
             if plan.metric == "cost":
                 return {"reply": "This dataset doesn’t include a cost field, so I can’t rank/group by cost.", "diagnostics": {"matched": matched}}
@@ -250,8 +250,9 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
             if not col:
                 return {"reply": "I can only group by Team_Member/Client/Work/Role/Task_Type/Fee_Type/Month.", "diagnostics": {"matched": matched}}
 
+            order = "ASC" if plan.op == "bottom" else "DESC"
             cur.execute(
-                f"SELECT {col}, COALESCE(SUM({metric_col}),0) as v FROM {VIEW}{where_sql} GROUP BY {col} ORDER BY v DESC LIMIT %s",
+                f"SELECT {col}, COALESCE(SUM({metric_col}),0) as v FROM {VIEW}{where_sql} GROUP BY {col} ORDER BY v {order} LIMIT %s",
                 params + [plan.limit],
             )
             items = cur.fetchall()
@@ -266,7 +267,12 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                 label = "(blank)" if k is None or (isinstance(k, str) and not k.strip()) else k
                 lines.append(f"- {label}: {dur}")
 
-            title = f"Top {len(items)} by time" if plan.op == "top" else f"Time by {gb}"
+            if plan.op == "top":
+                title = f"Top {len(items)} by time"
+            elif plan.op == "bottom":
+                title = f"Lowest {len(items)} by time"
+            else:
+                title = f"Time by {gb}"
             return {"reply": title + ":\n" + "\n".join(lines), "diagnostics": {"matched": matched}}
 
         if plan.op == "list":

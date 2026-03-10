@@ -81,9 +81,18 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
     if plan.op == "distinct" and not plan.group_by:
         plan.group_by = "Team_Member"
 
-    # group_sum/top need a metric; default to time for hours-style questions.
-    if plan.op in ("group_sum", "top") and not plan.metric:
+    # group_sum/top/bottom need a metric; default to time for hours-style questions.
+    if plan.op in ("group_sum", "top", "bottom") and not plan.metric:
         plan.metric = "time_minutes"
+
+    # Deterministic fix: "least/lowest" should not use top.
+    if ("least" in t or "lowest" in t or "minimum" in t) and plan.op == "top":
+        plan.op = "bottom"
+        plan.group_by = plan.group_by or "Team_Member"
+        # If they asked for a single result, keep limit=1
+        if "top" not in t and "5" not in t and "10" not in t and plan.limit:
+            # leave the parser-provided limit; common case is limit=1
+            pass
 
     # Guardrail: if the plan has no filters and is asking to list rows, don't dump random records.
     has_filter = any(
