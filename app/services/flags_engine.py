@@ -76,11 +76,8 @@ def run_weekly_flags(*, from_ymd: str, to_ymd: str, limit: int = 50) -> dict:
                 if len(flags["fee_type_mismatch"]) >= limit:
                     break
 
-        # --- TW task booked to clients (row-level)
-        params: list = [from_ymd, to_ymd]
-        tw_task_clause = _ilike_any('"Task Type"', rc.TW_TASK_KEYWORDS, params)
-        tw_client_clause = _ilike_any('"Client"', rc.TREEWALK_CLIENT_KEYWORDS, params)
-
+        # --- TW task booked to clients (or vice versa)
+        # Do filtering in Python to avoid SQL placeholder duplication issues.
         cur.execute(
             f"""
             SELECT "Date"::date, "Team Member", "Client", "Work", "Task Type", "Fee Type", COALESCE(NULLIF("Time (Minutes)", ''), '0')::numeric
@@ -88,14 +85,10 @@ def run_weekly_flags(*, from_ymd: str, to_ymd: str, limit: int = 50) -> dict:
             WHERE "Date"::date >= %s::date AND "Date"::date < %s::date
               AND "Task Type" IS NOT NULL
               AND "Client" IS NOT NULL
-              AND (
-                    ({tw_task_clause} AND NOT {tw_client_clause})
-                 OR (NOT {tw_task_clause} AND {tw_client_clause})
-              )
             ORDER BY "Date" DESC
             LIMIT %s
             """,
-            params + [limit],
+            [from_ymd, to_ymd, max(limit * 50, 2000)],
         )
         rows = cur.fetchall()
         for d, tm, client, work, task_type, fee_type, mins in rows:
@@ -127,6 +120,9 @@ def run_weekly_flags(*, from_ymd: str, to_ymd: str, limit: int = 50) -> dict:
                         "minutes": float(mins or 0),
                     }
                 )
+
+            if len(flags["tw_task_booked_to_client"]) >= limit and len(flags["client_work_booked_to_treewalk"]) >= limit:
+                break
 
         # --- Stat holidays missing/extra PTO (person-day)
         # Determine which stat holidays fall inside the range.
