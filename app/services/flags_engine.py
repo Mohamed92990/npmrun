@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import date
+import os
 
 from app.services.postgres_client import PostgresClient, load_pg_conn_info
 from app.services import rules_config as rc
@@ -24,7 +25,9 @@ def _norm_set(values: set[str]) -> set[str]:
 
 
 def run_weekly_flags(*, from_ymd: str, to_ymd: str, limit: int = 50) -> dict:
-    conninfo = load_pg_conn_info()
+    # Backward/forward compatible: some deployments require env_path param.
+    # If Render env vars are set, postgres_client will ignore this file.
+    conninfo = load_pg_conn_info(os.getenv("ENV_SUPABASE_PATH", ".env.supabase"))
     pg = PostgresClient(conninfo)
 
     fixed_fee = _norm_set(rc.FIXED_FEE_CLIENTS)
