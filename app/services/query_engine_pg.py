@@ -143,7 +143,46 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
             mins = int(round(float(cur.fetchone()[0] or 0)))
             h, m = mins // 60, mins % 60
             dur = f"{h}h {m}m" if h and m else (f"{h}h" if h else f"{m}m")
-            return {"reply": f"Total time is {dur}.", "diagnostics": {"matched": matched, "total_minutes": mins}}
+            # Natural reply
+            period = ""
+            try:
+                if from_ymd and to_ymd and len(from_ymd) >= 10:
+                    y, mo, _ = from_ymd.split("-", 2)
+                    month_names = {
+                        "01": "January",
+                        "02": "February",
+                        "03": "March",
+                        "04": "April",
+                        "05": "May",
+                        "06": "June",
+                        "07": "July",
+                        "08": "August",
+                        "09": "September",
+                        "10": "October",
+                        "11": "November",
+                        "12": "December",
+                    }
+                    mm = mo.zfill(2)
+                    if mm in month_names:
+                        period = f" in {month_names[mm]} {y}"
+            except Exception:
+                period = ""
+
+            subject_parts = []
+            if person:
+                subject_parts.append(person)
+            if client:
+                subject_parts.append(client)
+            if work:
+                subject_parts.append(work)
+
+            if subject_parts:
+                subj = " for ".join(subject_parts) if len(subject_parts) > 1 else subject_parts[0]
+                reply = f"{subj} worked {dur}{period}."
+            else:
+                reply = f"Total time{period} was {dur}."
+
+            return {"reply": reply, "diagnostics": {"matched": matched, "total_minutes": mins}}
 
         if plan.op == "distinct":
             gb = plan.group_by or "team_member"
@@ -198,22 +237,61 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
 
             # Slightly smarter phrasing based on the question
             q = (raw_text or "").lower()
+            # Build a natural header + numbered list (no colons)
+            header = None
             if gb == "Team_Member" and ("bookkeeper" in q or "bookkeeping" in q):
-                prefix = "Bookkeeper" if len(vals) == 1 else "Bookkeepers"
-                reply = f"{prefix}: {join_list(shown)}"
+                header = "Bookkeepers"
             elif "what tasks" in q or "what task" in q:
-                reply = f"Tasks: {join_list(shown)}"
+                header = "Tasks"
             elif "what clients" in q or "which clients" in q:
-                reply = f"Clients: {join_list(shown)}"
+                header = "Clients"
             elif "what work" in q or "what projects" in q or "which projects" in q:
-                reply = f"Work: {join_list(shown)}"
-            elif "who" in q:
-                reply = join_list(shown)
+                header = "Work items"
+            elif "who" in q and gb == "Team_Member":
+                header = "People"
             else:
-                reply = f"{label}: {join_list(shown)}"
+                header = label
+
+            # Add a little context if available
+            context_bits = []
+            if person:
+                context_bits.append(f"for {person}")
+            if client:
+                context_bits.append(f"at {client}")
+            if work:
+                context_bits.append(f"on {work}")
+            if from_ymd and to_ymd and len(from_ymd) >= 10:
+                try:
+                    y, mo, _ = from_ymd.split("-", 2)
+                    month_names = {
+                        "01": "January",
+                        "02": "February",
+                        "03": "March",
+                        "04": "April",
+                        "05": "May",
+                        "06": "June",
+                        "07": "July",
+                        "08": "August",
+                        "09": "September",
+                        "10": "October",
+                        "11": "November",
+                        "12": "December",
+                    }
+                    mm = mo.zfill(2)
+                    if mm in month_names:
+                        context_bits.append(f"in {month_names[mm]} {y}")
+                except Exception:
+                    pass
+
+            title = header
+            if context_bits:
+                title += " " + " ".join(context_bits)
+
+            lines = [f"{i}) {v}" for i, v in enumerate(shown, start=1)]
+            reply = title + "\n" + "\n".join(lines)
 
             if extra_n:
-                reply += f" (and {extra_n} more)"
+                reply += f"\nPlus {extra_n} more."
 
             return {"reply": reply, "diagnostics": {"matched": matched, "count": len(vals)}}
 
@@ -235,15 +313,24 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                 items = cur.fetchall()
                 if not items:
                     return {"reply": "I couldn’t find anything matching that in the database.", "diagnostics": {"matched": matched}}
-                lines = []
-                for row, v in items:
-                    mins = int(round(float(v)))
+                def fmt_dur(vmins: float) -> str:
+                    mins = int(round(float(vmins)))
                     h, m = mins // 60, mins % 60
-                    dur = f"{h}h {m}m" if h and m else (f"{h}h" if h else f"{m}m")
+                    return f"{h}h {m}m" if h and m else (f"{h}h" if h else f"{m}m")
+
+                lines = []
+                for i, (row, v) in enumerate(items, start=1):
                     label = row.strftime("%Y-%m") if hasattr(row, "strftime") else str(row)
-                    lines.append(f"- {label}: {dur}")
-                title = f"Top {len(items)} months by time" if plan.op == "top" else "Time by month"
-                return {"reply": title + ":\n" + "\n".join(lines), "diagnostics": {"matched": matched}}
+                    lines.append(f"{i}) {label} — {fmt_dur(v)}")
+
+                if plan.op == "top":
+                    title = f"Top {len(items)} months by time"
+                elif plan.op == "bottom":
+                    title = f"Lowest {len(items)} months by time"
+                else:
+                    title = "Time by month"
+
+                return {"reply": title + "\n" + "\n".join(lines), "diagnostics": {"matched": matched}}
 
             allowed = {"Team_Member": "team_member", "Client": "client", "Work": "work", "Role": "role", "Task_Type": "task_type", "Fee_Type": "fee_type"}
             col = allowed.get(gb, None)
@@ -298,11 +385,11 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                 label = "(blank)" if k is None or (isinstance(k, str) and not k.strip()) else k
                 dur = fmt_dur(v)
                 if plan.op == "top":
-                    return {"reply": f"Most time{period}: {label} — {dur}.", "diagnostics": {"matched": matched}}
+                    return {"reply": f"Most time{period} was {label} at {dur}.", "diagnostics": {"matched": matched}}
                 if plan.op == "bottom":
-                    return {"reply": f"Least time{period}: {label} — {dur}.", "diagnostics": {"matched": matched}}
+                    return {"reply": f"Least time{period} was {label} at {dur}.", "diagnostics": {"matched": matched}}
 
-            # Otherwise, return a short ranked list.
+            # Otherwise, return a ranked list.
             lines = []
             for i, (k, v) in enumerate(items, start=1):
                 label = "(blank)" if k is None or (isinstance(k, str) and not k.strip()) else k
@@ -315,7 +402,7 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
             else:
                 title = f"Time by {gb}{period}"
 
-            return {"reply": title + ":\n" + "\n".join(lines), "diagnostics": {"matched": matched}}
+            return {"reply": title + "\n" + "\n".join(lines), "diagnostics": {"matched": matched}}
 
         if plan.op == "list":
             cur.execute(
@@ -336,6 +423,22 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
             ]
             if not data:
                 return {"reply": "I couldn’t find anything matching that in the database.", "diagnostics": {"matched": matched}, "data": []}
-            return {"reply": f"Here are {len(data)} records.", "diagnostics": {"matched": matched}, "data": data}
+
+            # Natural summary + keep raw data available for downstream steps
+            reply_lines = [f"I found {len(data)} entries."]
+            for i, r in enumerate(data[: min(len(data), 5)], start=1):
+                # Compact line: date + client/work
+                bits = []
+                if r.get("Date"):
+                    bits.append(r["Date"][:10])
+                if r.get("Client"):
+                    bits.append(str(r["Client"]))
+                if r.get("Work"):
+                    bits.append(str(r["Work"]))
+                reply_lines.append(f"{i}) " + " — ".join(bits))
+            if len(data) > 5:
+                reply_lines.append(f"Plus {len(data) - 5} more.")
+
+            return {"reply": "\n".join(reply_lines), "diagnostics": {"matched": matched}, "data": data}
 
         return {"reply": "Unsupported op.", "diagnostics": {"matched": matched}}
