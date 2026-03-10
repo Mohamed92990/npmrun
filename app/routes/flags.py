@@ -29,6 +29,9 @@ def flags_weekly(payload: FlagsWeeklyIn, x_webhook_secret: str | None = Header(d
     except Exception as e:
         # Return a safe, actionable error message for n8n without leaking secrets.
         msg = f"flags_weekly failed: {type(e).__name__}: {str(e)}"
+        # Add a little context for common index errors
+        if isinstance(e, IndexError):
+            msg += " (likely SQL result shape mismatch / empty sheet / unexpected columns)"
         msg = msg.replace("password", "[redacted]")
         if len(msg) > 400:
             msg = msg[:400] + "..."

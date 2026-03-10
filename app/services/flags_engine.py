@@ -138,7 +138,7 @@ def run_weekly_flags(*, from_ymd: str, to_ymd: str, limit: int = 50) -> dict:
                 [
                     _ilike_any('"Task Type"', rc.PTO_KEYWORDS, pto_params),
                     _ilike_any('"Work"', rc.PTO_KEYWORDS, pto_params),
-                    _ilike_any('"Notes"', rc.PTO_KEYWORDS, pto_params),
+                    _ilike_any('COALESCE("Notes",\'\')', rc.PTO_KEYWORDS, pto_params),
                 ]
             ) + ")"
 
