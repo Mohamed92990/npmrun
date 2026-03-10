@@ -54,12 +54,64 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
             from datetime import datetime
 
             m = re.search(r"\b(20\d{2})\b", t)
-            year = int(m.group(1)) if m else 2025  # dataset is 2025-only right now
 
-            start = datetime(year, month_num, 1)
-            end = datetime(year + 1, 1, 1) if month_num == 12 else datetime(year, month_num + 1, 1)
-            plan.from_ymd = start.date().isoformat()
-            plan.to_ymd = end.date().isoformat()
+            def _month_bounds(year: int):
+                start = datetime(year, month_num, 1)
+                end = datetime(year + 1, 1, 1) if month_num == 12 else datetime(year, month_num + 1, 1)
+                return start.date().isoformat(), end.date().isoformat()
+
+            # If year not provided, choose the most recent year available (prefer 2026, else 2025).
+            if m:
+                year = int(m.group(1))
+            else:
+                year = 2025
+                try:
+                    # Check if there is any data for this month in 2026 (under current filters).
+                    from app.services.postgres_client import PostgresClient, load_pg_conn_info
+
+                    VIEW = "public.karbon_timesheets_typed"
+                    conninfo = load_pg_conn_info()
+                    pg = PostgresClient(conninfo)
+
+                    f26, t26 = _month_bounds(2026)
+
+                    # Build filter where from the current plan
+                    where = []
+                    params = []
+                    if plan.person:
+                        where.append("team_member ILIKE %s")
+                        params.append(f"%{plan.person}%")
+                    if plan.client:
+                        where.append("client = %s")
+                        params.append(plan.client)
+                    if plan.work:
+                        where.append("work = %s")
+                        params.append(plan.work)
+                    if plan.role:
+                        where.append("role ILIKE %s")
+                        params.append(f"%{plan.role}%")
+                    if plan.task_type:
+                        where.append("task_type ILIKE %s")
+                        params.append(f"%{plan.task_type}%")
+                    if plan.fee_type:
+                        where.append("fee_type ILIKE %s")
+                        params.append(f"%{plan.fee_type}%")
+
+                    where.append("date_ts >= %s::timestamptz AND date_ts < %s::timestamptz")
+                    params.extend([f26, t26])
+
+                    where_sql = " WHERE " + " AND ".join(where) if where else ""
+
+                    with pg.connect() as conn, conn.cursor() as cur:
+                        cur.execute(f"SELECT 1 FROM {VIEW}{where_sql} LIMIT 1", params)
+                        if cur.fetchone():
+                            year = 2026
+                except Exception:
+                    year = 2025
+
+            f, t_ = _month_bounds(year)
+            plan.from_ymd = f
+            plan.to_ymd = t_
 
     # Rewrite common "what X" questions into safe distinct queries (better UX than listing rows).
     if plan.op == "list":
