@@ -32,6 +32,57 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
         elif "billable" in t and "non-billable" not in t and "nonbillable" not in t:
             plan.fee_type = "Billable"
 
+    # Day-specific handling: if the user mentions an explicit date (e.g. "Feb 2nd 2026"),
+    # force a single-day range [date, date+1) so we don't accidentally return the whole month.
+    import re
+    from datetime import datetime, timedelta
+
+    month_map = {
+        "january": 1,
+        "february": 2,
+        "march": 3,
+        "april": 4,
+        "may": 5,
+        "june": 6,
+        "july": 7,
+        "august": 8,
+        "september": 9,
+        "october": 10,
+        "november": 11,
+        "december": 12,
+    }
+
+    def _parse_explicit_date(text: str) -> str | None:
+        # ISO date first
+        m = re.search(r"\b(20\d{2})-(\d{2})-(\d{2})\b", text)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+        # Month name formats: "Feb 2nd 2026", "February 2, 2026", "March 3rd 2026"
+        m = re.search(
+            r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+"
+            r"(\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+(20\d{2})\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            month = month_map[m.group(1).lower()]
+            day = int(m.group(2))
+            year = int(m.group(3))
+            try:
+                return datetime(year, month, day).date().isoformat()
+            except Exception:
+                return None
+
+        return None
+
+    explicit_day = _parse_explicit_date(t)
+    if explicit_day:
+        d0 = datetime.fromisoformat(explicit_day)
+        d1 = (d0 + timedelta(days=1)).date().isoformat()
+        plan.from_ymd = explicit_day
+        plan.to_ymd = d1
+
     # Month handling: if the user mentions a month but does not mention a year,
     # default to the most recent year available in the DB (prefer 2026, else 2025).
     # IMPORTANT: this should override any LLM-guessed year to keep behavior consistent.
@@ -50,7 +101,7 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
         "december": 12,
     }
     month_num = next((m for name, m in months.items() if name in t), None)
-    if month_num:
+    if month_num and not explicit_day:
         import re
         from datetime import datetime
 
