@@ -259,20 +259,62 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
             if not items:
                 return {"reply": "I couldn’t find anything matching that in the database.", "diagnostics": {"matched": matched}}
 
-            lines = []
-            for k, v in items:
-                mins = int(round(float(v)))
+            def fmt_dur(vmins: float) -> str:
+                mins = int(round(float(vmins)))
                 h, m = mins // 60, mins % 60
-                dur = f"{h}h {m}m" if h and m else (f"{h}h" if h else f"{m}m")
+                return f"{h}h {m}m" if h and m else (f"{h}h" if h else f"{m}m")
+
+            def fmt_period() -> str:
+                # Best-effort: convert from_ymd/to_ymd into a friendly label.
+                try:
+                    if from_ymd and to_ymd and len(from_ymd) >= 10:
+                        y, mo, _ = from_ymd.split("-", 2)
+                        month_names = {
+                            "01": "January",
+                            "02": "February",
+                            "03": "March",
+                            "04": "April",
+                            "05": "May",
+                            "06": "June",
+                            "07": "July",
+                            "08": "August",
+                            "09": "September",
+                            "10": "October",
+                            "11": "November",
+                            "12": "December",
+                        }
+                        mm = mo.zfill(2)
+                        if mm in month_names:
+                            return f" in {month_names[mm]} {y}"
+                except Exception:
+                    pass
+                return ""
+
+            period = fmt_period()
+
+            # If single result, return a natural sentence.
+            if plan.limit == 1 and items:
+                k, v = items[0]
                 label = "(blank)" if k is None or (isinstance(k, str) and not k.strip()) else k
-                lines.append(f"- {label}: {dur}")
+                dur = fmt_dur(v)
+                if plan.op == "top":
+                    return {"reply": f"Most time{period}: {label} — {dur}.", "diagnostics": {"matched": matched}}
+                if plan.op == "bottom":
+                    return {"reply": f"Least time{period}: {label} — {dur}.", "diagnostics": {"matched": matched}}
+
+            # Otherwise, return a short ranked list.
+            lines = []
+            for i, (k, v) in enumerate(items, start=1):
+                label = "(blank)" if k is None or (isinstance(k, str) and not k.strip()) else k
+                lines.append(f"{i}) {label} — {fmt_dur(v)}")
 
             if plan.op == "top":
-                title = f"Top {len(items)} by time"
+                title = f"Top {len(items)} by time{period}"
             elif plan.op == "bottom":
-                title = f"Lowest {len(items)} by time"
+                title = f"Lowest {len(items)} by time{period}"
             else:
-                title = f"Time by {gb}"
+                title = f"Time by {gb}{period}"
+
             return {"reply": title + ":\n" + "\n".join(lines), "diagnostics": {"matched": matched}}
 
         if plan.op == "list":
