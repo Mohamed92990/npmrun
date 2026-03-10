@@ -61,6 +61,18 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
             plan.from_ymd = start.date().isoformat()
             plan.to_ymd = end.date().isoformat()
 
+    # Rewrite common "what X" questions into safe distinct queries (better UX than listing rows).
+    if plan.op == "list":
+        if "what tasks" in t or "what task" in t:
+            plan.op = "distinct"
+            plan.group_by = "Task_Type"
+        elif "what clients" in t or "which clients" in t:
+            plan.op = "distinct"
+            plan.group_by = "Client"
+        elif "what work" in t or "what projects" in t or "which projects" in t:
+            plan.op = "distinct"
+            plan.group_by = "Work"
+
     if "who" in t and plan.op == "list":
         # If they asked "who", listing rows is usually not what they want.
         plan.op = "distinct"

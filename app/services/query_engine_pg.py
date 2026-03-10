@@ -147,25 +147,73 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
 
         if plan.op == "distinct":
             gb = plan.group_by or "team_member"
-            allowed = {"Team_Member": "team_member", "Client": "client", "Work": "work", "Role": "role", "Task_Type": "task_type", "Fee_Type": "fee_type"}
+            allowed = {
+                "Team_Member": "team_member",
+                "Client": "client",
+                "Work": "work",
+                "Role": "role",
+                "Task_Type": "task_type",
+                "Fee_Type": "fee_type",
+            }
             col = allowed.get(gb, None)
             if not col:
-                return {"reply": "I can only list distinct Team_Member/Client/Work/Role/Task_Type/Fee_Type.", "diagnostics": {"matched": matched}}
-            cur.execute(f"SELECT DISTINCT {col} FROM {VIEW}{where_sql} AND {col} IS NOT NULL" if where_sql else f"SELECT DISTINCT {col} FROM {VIEW} WHERE {col} IS NOT NULL", params)
+                return {
+                    "reply": "I can list distinct people, clients, work items, roles, task types, or fee types.",
+                    "diagnostics": {"matched": matched},
+                }
+
+            cur.execute(
+                f"SELECT DISTINCT {col} FROM {VIEW}{where_sql} AND {col} IS NOT NULL"
+                if where_sql
+                else f"SELECT DISTINCT {col} FROM {VIEW} WHERE {col} IS NOT NULL",
+                params,
+            )
             vals = [r[0] for r in cur.fetchall()]
-            vals = [v for v in vals if v]
+            vals = [v for v in vals if v and (not isinstance(v, str) or v.strip())]
             vals.sort()
             if not vals:
                 return {"reply": "I couldn’t find anything matching that in the database.", "diagnostics": {"matched": matched}}
-            # Human-friendly phrasing
+
+            # Limit + "and N more" behavior
             shown = vals[: plan.limit]
-            if gb == "Team_Member":
-                if len(shown) == 1:
-                    reply = f"{shown[0]}"
-                else:
-                    reply = ", ".join(shown)
+            extra_n = max(0, len(vals) - len(shown))
+
+            def join_list(items: list[str]) -> str:
+                if len(items) == 1:
+                    return items[0]
+                if len(items) == 2:
+                    return f"{items[0]} and {items[1]}"
+                return ", ".join(items[:-1]) + f", and {items[-1]}"
+
+            # Friendly labels
+            label_map = {
+                "Team_Member": "People",
+                "Client": "Clients",
+                "Work": "Work items",
+                "Role": "Roles",
+                "Task_Type": "Task types",
+                "Fee_Type": "Fee types",
+            }
+            label = label_map.get(gb, gb)
+
+            # Slightly smarter phrasing based on the question
+            q = (raw_text or "").lower()
+            if gb == "Team_Member" and ("bookkeeper" in q or "bookkeeping" in q):
+                prefix = "Bookkeeper" if len(vals) == 1 else "Bookkeepers"
+                reply = f"{prefix}: {join_list(shown)}"
+            elif "what tasks" in q or "what task" in q:
+                reply = f"Tasks: {join_list(shown)}"
+            elif "what clients" in q or "which clients" in q:
+                reply = f"Clients: {join_list(shown)}"
+            elif "what work" in q or "what projects" in q or "which projects" in q:
+                reply = f"Work: {join_list(shown)}"
+            elif "who" in q:
+                reply = join_list(shown)
             else:
-                reply = f"{gb} values: " + ", ".join(shown)
+                reply = f"{label}: {join_list(shown)}"
+
+            if extra_n:
+                reply += f" (and {extra_n} more)"
 
             return {"reply": reply, "diagnostics": {"matched": matched, "count": len(vals)}}
 
