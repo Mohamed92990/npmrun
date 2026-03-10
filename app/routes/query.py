@@ -39,17 +39,29 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
 
     month_map = {
         "january": 1,
+        "jan": 1,
         "february": 2,
+        "feb": 2,
         "march": 3,
+        "mar": 3,
         "april": 4,
+        "apr": 4,
         "may": 5,
         "june": 6,
+        "jun": 6,
         "july": 7,
+        "jul": 7,
         "august": 8,
+        "aug": 8,
         "september": 9,
+        "sep": 9,
+        "sept": 9,
         "october": 10,
+        "oct": 10,
         "november": 11,
+        "nov": 11,
         "december": 12,
+        "dec": 12,
     }
 
     def _parse_explicit_date(text: str) -> str | None:
@@ -60,13 +72,14 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
 
         # Month name formats: "Feb 2nd 2026", "February 2, 2026", "March 3rd 2026"
         m = re.search(
-            r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+"
+            r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
+            r"sep(?:tember)?|sept(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+"
             r"(\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+(20\d{2})\b",
             text,
             flags=re.IGNORECASE,
         )
         if m:
-            month = month_map[m.group(1).lower()]
+            month = month_map[m.group(1).lower().replace(".", "")]
             day = int(m.group(2))
             year = int(m.group(3))
             try:
@@ -82,6 +95,12 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
         d1 = (d0 + timedelta(days=1)).date().isoformat()
         plan.from_ymd = explicit_day
         plan.to_ymd = d1
+
+        # If user asked "what tasks did ... work on <date>", prefer a time breakdown by Work.
+        if ("what task" in t or "what tasks" in t) and plan.op == "list":
+            plan.op = "group_sum"
+            plan.group_by = "Work"
+            plan.metric = plan.metric or "time_minutes"
 
     # Month handling: if the user mentions a month but does not mention a year,
     # default to the most recent year available in the DB (prefer 2026, else 2025).
