@@ -483,16 +483,15 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                 label = "(blank)" if k is None or (isinstance(k, str) and not k.strip()) else k
                 lines.append(f"{i}) {label} — {fmt_dur(v)}")
 
-            # Nicer title for day-specific "what tasks" questions
+            # Nicer title for day-specific breakdowns
             q = (raw_text or "").lower()
-            if (
-                plan.op == "group_sum"
-                and gb == "Work"
-                and person
-                and period.startswith(" on ")
-                and ("what task" in q or "what tasks" in q)
-            ):
-                title = f"{person} logged these tasks{period}"
+            if plan.op == "group_sum" and person and period.startswith(" on "):
+                if gb == "Work" and ("what task" in q or "what tasks" in q):
+                    title = f"{person} logged these tasks{period}"
+                elif gb == "Task_Type" or ("breakdown" in q and "task" in q):
+                    title = f"{person} logged these entries{period}"
+                else:
+                    title = f"{person} logged these entries{period}"
             else:
                 if plan.op == "top":
                     title = f"Top {len(items)} by time{period}"
