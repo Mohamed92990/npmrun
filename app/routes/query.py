@@ -29,6 +29,19 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
     if ("bookkeeper" in t or "bookkeeping" in t) and not plan.task_type:
         plan.task_type = "Bookkeeping"
 
+    # Deterministic role/title → Task Type mapping (Task Type is the reliable signal in this dataset)
+    # Examples in CSV include "Financial Reporting: Monthly" etc, not "Financial Reporter".
+    if any(k in t for k in ["financial reporter", "financial reporting analyst", "financial reporting"]):
+        if not plan.task_type:
+            plan.task_type = "Financial Reporting"
+        # avoid brittle Role matches
+        plan.role = None
+
+    if "consultant" in t or "consulting" in t:
+        if not plan.task_type:
+            plan.task_type = "Consulting"
+        plan.role = None
+
     # If user clearly says billable/non-billable and plan has no fee_type, set it.
     if not plan.fee_type:
         if "non-billable" in t or "nonbillable" in t or "non billable" in t:
