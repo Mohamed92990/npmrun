@@ -147,24 +147,51 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
             period = ""
             try:
                 if from_ymd and to_ymd and len(from_ymd) >= 10:
-                    y, mo, _ = from_ymd.split("-", 2)
-                    month_names = {
-                        "01": "January",
-                        "02": "February",
-                        "03": "March",
-                        "04": "April",
-                        "05": "May",
-                        "06": "June",
-                        "07": "July",
-                        "08": "August",
-                        "09": "September",
-                        "10": "October",
-                        "11": "November",
-                        "12": "December",
-                    }
-                    mm = mo.zfill(2)
-                    if mm in month_names:
-                        period = f" in {month_names[mm]} {y}"
+                    # If it looks like a single-day window [d, d+1), prefer "on <date>".
+                    try:
+                        d0 = datetime.fromisoformat(from_ymd).date()
+                        d1 = datetime.fromisoformat(to_ymd).date()
+                        if (d1.toordinal() - d0.toordinal()) == 1:
+                            period = f" on {d0.isoformat()}"
+                        else:
+                            y, mo, _ = from_ymd.split("-", 2)
+                            month_names = {
+                                "01": "January",
+                                "02": "February",
+                                "03": "March",
+                                "04": "April",
+                                "05": "May",
+                                "06": "June",
+                                "07": "July",
+                                "08": "August",
+                                "09": "September",
+                                "10": "October",
+                                "11": "November",
+                                "12": "December",
+                            }
+                            mm = mo.zfill(2)
+                            if mm in month_names:
+                                period = f" in {month_names[mm]} {y}"
+                    except Exception:
+                        # Fallback to month label
+                        y, mo, _ = from_ymd.split("-", 2)
+                        month_names = {
+                            "01": "January",
+                            "02": "February",
+                            "03": "March",
+                            "04": "April",
+                            "05": "May",
+                            "06": "June",
+                            "07": "July",
+                            "08": "August",
+                            "09": "September",
+                            "10": "October",
+                            "11": "November",
+                            "12": "December",
+                        }
+                        mm = mo.zfill(2)
+                        if mm in month_names:
+                            period = f" in {month_names[mm]} {y}"
             except Exception:
                 period = ""
 
@@ -355,6 +382,14 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                 # Best-effort: convert from_ymd/to_ymd into a friendly label.
                 try:
                     if from_ymd and to_ymd and len(from_ymd) >= 10:
+                        try:
+                            d0 = datetime.fromisoformat(from_ymd).date()
+                            d1 = datetime.fromisoformat(to_ymd).date()
+                            if (d1.toordinal() - d0.toordinal()) == 1:
+                                return f" on {d0.isoformat()}"
+                        except Exception:
+                            pass
+
                         y, mo, _ = from_ymd.split("-", 2)
                         month_names = {
                             "01": "January",
@@ -395,12 +430,23 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                 label = "(blank)" if k is None or (isinstance(k, str) and not k.strip()) else k
                 lines.append(f"{i}) {label} — {fmt_dur(v)}")
 
-            if plan.op == "top":
-                title = f"Top {len(items)} by time{period}"
-            elif plan.op == "bottom":
-                title = f"Lowest {len(items)} by time{period}"
+            # Nicer title for day-specific "what tasks" questions
+            q = (raw_text or "").lower()
+            if (
+                plan.op == "group_sum"
+                and gb == "Work"
+                and person
+                and period.startswith(" on ")
+                and ("what task" in q or "what tasks" in q)
+            ):
+                title = f"{person} logged these tasks{period}"
             else:
-                title = f"Time by {gb}{period}"
+                if plan.op == "top":
+                    title = f"Top {len(items)} by time{period}"
+                elif plan.op == "bottom":
+                    title = f"Lowest {len(items)} by time{period}"
+                else:
+                    title = f"Time by {gb}{period}"
 
             return {"reply": title + "\n" + "\n".join(lines), "diagnostics": {"matched": matched}}
 

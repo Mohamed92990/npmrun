@@ -19,7 +19,11 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
     plan = parse_nl_to_plan(payload.text)
 
     # Deterministic patch-ups for common phrases to improve reliability.
-    t = (payload.text or "").lower()
+    # Normalize common Teams artifacts (HTML entities, non-breaking spaces, extra whitespace)
+    raw_text = (payload.text or "")
+    raw_text = raw_text.replace("&nbsp;", " ").replace("\u00a0", " ")
+    raw_text = " ".join(raw_text.split())
+    t = raw_text.lower()
 
     # If user asks who/bookkeeper/bookkeeping, force a safe shape.
     if ("bookkeeper" in t or "bookkeeping" in t) and not plan.task_type:
@@ -97,9 +101,14 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
         plan.to_ymd = d1
 
         # If user asked "what tasks did ... work on <date>", prefer a time breakdown by Work.
-        if ("what task" in t or "what tasks" in t) and plan.op == "list":
+        if ("what task" in t or "what tasks" in t):
             plan.op = "group_sum"
             plan.group_by = "Work"
+            plan.metric = plan.metric or "time_minutes"
+
+        # If user asked for total time/hours on a specific day, force a sum.
+        if ("how many" in t or "total" in t) and ("hour" in t or "hours" in t or "time" in t):
+            plan.op = "sum"
             plan.metric = plan.metric or "time_minutes"
 
     # Month handling: if the user mentions a month but does not mention a year,
@@ -161,8 +170,9 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
             plan.from_ymd, plan.to_ymd = f, t_
 
     # Rewrite common "what X" questions into safe distinct queries (better UX than listing rows).
+    # If the user provided an explicit day, do NOT rewrite "what tasks" into distinct Task_Type.
     if plan.op == "list":
-        if "what tasks" in t or "what task" in t:
+        if ("what tasks" in t or "what task" in t) and not explicit_day:
             plan.op = "distinct"
             plan.group_by = "Task_Type"
         elif "what clients" in t or "which clients" in t:
