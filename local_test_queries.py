@@ -12,6 +12,7 @@ QUERIES = [
     "What tasks did Jay work on Feb 2nd 2026",
     "What tasks did Jay work on 2026-02-02",
     "In January 2026 give me the top 5 clients we spent most hours on",
+    "How many non billable hours did Akash have in January 2026?",
 ]
 
 

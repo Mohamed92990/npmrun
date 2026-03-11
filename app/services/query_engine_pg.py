@@ -118,8 +118,16 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
         where.append("task_type ILIKE %s")
         params.append(f"%{task}%")
     if fee_type_filter:
-        where.append("fee_type ILIKE %s")
-        params.append(f"%{fee_type_filter}%")
+        # Some exports encode non-billable work in Task Type labels (e.g. "Non-billable: File Transition")
+        # even when Fee Type is missing/inconsistent. For Non-Billable queries, include both signals.
+        ft = fee_type_filter.strip().lower()
+        if "non" in ft and "bill" in ft:
+            where.append("(fee_type ILIKE %s OR task_type ILIKE %s)")
+            params.append("%Non-Billable%")
+            params.append("Non-billable%")
+        else:
+            where.append("fee_type ILIKE %s")
+            params.append(f"%{fee_type_filter}%")
 
     if from_ymd and to_ymd:
         where.append("date_ts >= %s::timestamptz AND date_ts < %s::timestamptz")
