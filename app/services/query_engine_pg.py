@@ -72,6 +72,26 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
         range_where_sql = " WHERE date_ts >= %s::timestamptz AND date_ts < %s::timestamptz"
         range_params = [from_ymd, to_ymd]
 
+    # Strict name handling: if only a first name is provided and it matches multiple staff,
+    # refuse and ask for full name to avoid mixing people.
+    if person and len(person.split()) == 1:
+        with pg.connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT DISTINCT team_member FROM {VIEW}{range_where_sql}"
+                + (" AND team_member ILIKE %s" if range_where_sql else " WHERE team_member ILIKE %s")
+                + " ORDER BY team_member ASC LIMIT 25",
+                range_params + [f"%{person}%"],
+            )
+            matches = [r[0] for r in cur.fetchall() if r and r[0] and str(r[0]).strip()]
+
+        if len(matches) == 1:
+            person = str(matches[0]).strip()
+        elif len(matches) > 1:
+            return {
+                "reply": "Please query with full name as there are many staff members with this first name.",
+                "diagnostics": {"person_matches": matches[:10], "count": len(matches)},
+            }
+
     if len(populated) == 1:
         k, v = populated[0]
         # Try exact matches first
@@ -213,7 +233,11 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
 
             if subject_parts:
                 subj = " for ".join(subject_parts) if len(subject_parts) > 1 else subject_parts[0]
-                reply = f"{subj} worked {dur}{period}."
+                # Special phrasing for non-billable sums
+                if fee_type_filter and ("non" in fee_type_filter.lower() and "bill" in fee_type_filter.lower()):
+                    reply = f"{subj} had worked {dur} non billable hours{period}."
+                else:
+                    reply = f"{subj} worked {dur}{period}."
             else:
                 reply = f"Total time{period} was {dur}."
 
