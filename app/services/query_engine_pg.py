@@ -128,6 +128,20 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
     if client:
         where.append("client = %s")
         params.append(client)
+
+    # Excluding Treewalk logic
+    q_text = (raw_text or "").lower()
+    wants_top_client = (
+        ("which client" in q_text and "most" in q_text and ("hour" in q_text or "hours" in q_text))
+        or ("client had the most" in q_text)
+    )
+    exclude_treewalk = (
+        ("apart from treewalk" in q_text or "excluding treewalk" in q_text or "exclude treewalk" in q_text)
+        or wants_top_client
+    )
+    if exclude_treewalk and not client:
+        where.append("client NOT ILIKE %s")
+        params.append("Treewalk%")
     if work:
         where.append("work = %s")
         params.append(work)
@@ -236,6 +250,11 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                 # Special phrasing for non-billable sums
                 if fee_type_filter and ("non" in fee_type_filter.lower() and "bill" in fee_type_filter.lower()):
                     reply = f"{subj} had worked {dur} non billable hours{period}."
+                # Better grammar when user asks "how many hours did we spend on <client>"
+                elif client and ("did we spend" in (raw_text or "").lower() or "we spend" in (raw_text or "").lower()):
+                    # Avoid double punctuation if client ends with a period (e.g., "Inc.")
+                    end = "" if str(client).strip().endswith(".") else "."
+                    reply = f"We spent {dur} on {client}{period}{end}"
                 else:
                     reply = f"{subj} worked {dur}{period}."
             else:
@@ -452,6 +471,8 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                 label = "(blank)" if k is None or (isinstance(k, str) and not k.strip()) else k
                 dur = fmt_dur(v)
                 if plan.op == "top":
+                    if gb == "Client" and exclude_treewalk:
+                        return {"reply": f"Apart from Treewalk, the client with the most hours{period} was {label} at {dur}.", "diagnostics": {"matched": matched}}
                     return {"reply": f"Most time{period} was {label} at {dur}.", "diagnostics": {"matched": matched}}
                 if plan.op == "bottom":
                     return {"reply": f"Least time{period} was {label} at {dur}.", "diagnostics": {"matched": matched}}

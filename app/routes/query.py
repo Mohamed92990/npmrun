@@ -152,7 +152,9 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
                 from app.services.postgres_client import PostgresClient, load_pg_conn_info
 
                 VIEW = "public.karbon_timesheets_typed"
-                conninfo = load_pg_conn_info()
+                from app.services.query_engine_pg import ENV_SUPABASE
+
+                conninfo = load_pg_conn_info(str(ENV_SUPABASE))
                 pg = PostgresClient(conninfo)
 
                 f26, t26 = _month_bounds(2026)
