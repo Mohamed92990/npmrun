@@ -64,13 +64,27 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
         elif "billable" in t and "non-billable" not in t and "nonbillable" not in t:
             plan.fee_type = "Billable"
 
-    # PTO intent: treat PTO as a Task Type prefix (reliable in this dataset)
-    if "pto" in t and not plan.task_type:
-        plan.task_type = "PTO"
-
-    # Huddles intent ("Treewalk: Team Meetings - Huddles" contains this token)
-    if "huddles" in t and not plan.task_type:
-        plan.task_type = "Huddles"
+    # Task Type taxonomy mapping (prefix-based)
+    # We map intent keywords onto the top-level Task Type categories.
+    if not plan.task_type:
+        if "pto" in t or "vacation" in t or "sick" in t or "statutory holiday" in t or "unpaid" in t:
+            plan.task_type = "PTO"
+        elif "non billable" in t or "non-billable" in t or "nonbillable" in t:
+            plan.task_type = "Non-billable"
+        elif "financial reporting" in t or "financial reporter" in t or "financial reporting analyst" in t:
+            plan.task_type = "Financial Reporting"
+        elif "consulting" in t or "consultant" in t:
+            plan.task_type = "Consulting"
+        elif "bookkeeping" in t or "bookkeeper" in t:
+            plan.task_type = "Bookkeeping"
+        elif "payroll" in t:
+            plan.task_type = "Payroll"
+        elif "tax" in t:
+            plan.task_type = "Tax"
+        elif "payments" in t:
+            plan.task_type = "Payments"
+        elif "huddles" in t or "townhall" in t or "townhalls" in t or "onboarding" in t or "offboarding" in t or "recruitment" in t or "resource allocation" in t or "training" in t:
+            plan.task_type = "Treewalk"
 
     # Yes/no questions for PTO/huddles should sum the filtered time, not total time.
     if (t.startswith("did ") or " did " in t) and ("pto" in t or "huddles" in t):

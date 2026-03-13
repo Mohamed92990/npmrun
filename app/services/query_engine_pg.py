@@ -162,8 +162,25 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
         where.append("role ILIKE %s")
         params.append(f"%{role}%")
     if task:
-        where.append("task_type ILIKE %s")
-        params.append(f"%{task}%")
+        tnorm = _normalize_task_filter(task)
+        # Prefix-based category filter when caller uses a top-level category
+        categories = {
+            "Bookkeeping",
+            "Consulting",
+            "Financial Reporting",
+            "Non-billable",
+            "PTO",
+            "Payments",
+            "Payroll",
+            "Tax",
+            "Treewalk",
+        }
+        if tnorm in categories:
+            where.append("task_type ILIKE %s")
+            params.append(f"{tnorm}:%")
+        else:
+            where.append("task_type ILIKE %s")
+            params.append(f"%{tnorm}%")
     if fee_type_filter:
         # Some exports encode non-billable work in Task Type labels (e.g. "Non-billable: File Transition")
         # even when Fee Type is missing/inconsistent. For Non-Billable queries, include both signals.
@@ -229,7 +246,9 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                                 sm = str(d0.month).zfill(2)
                                 em = str((d1.month - 1) or 12).zfill(2)
                                 if sm in month_names and em in month_names:
-                                    if d1.month - d0.month == 2:
+                                    if sm == em:
+                                        period = f" in {month_names[sm]} {d0.year}"
+                                    elif d1.month - d0.month == 2:
                                         period = f" in {month_names[sm]} and {month_names[em]} {d0.year}"
                                     else:
                                         period = f" from {month_names[sm]} to {month_names[em]} {d0.year}"
