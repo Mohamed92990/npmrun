@@ -29,6 +29,21 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
     if ("bookkeeper" in t or "bookkeeping" in t) and not plan.task_type:
         plan.task_type = "Bookkeeping"
 
+    # Bookkeeping open-ended questions should never fall back to listing rows.
+    # Example: "What bookkeeping did Ubaid do in January 2026?"
+    if (
+        ("bookkeeping" in t)
+        and ("what" in t)
+        and plan.from_ymd
+        and plan.to_ymd
+        and plan.person
+        and ("what task" not in t and "what tasks" not in t)
+    ):
+        plan.op = "group_sum"
+        plan.group_by = "Client"
+        plan.metric = plan.metric or "time_minutes"
+        plan.task_type = plan.task_type or "Bookkeeping"
+
     # Deterministic role/title → Task Type mapping (Task Type is the reliable signal in this dataset)
     # Examples in CSV include "Financial Reporting: Monthly" etc, not "Financial Reporter".
     if any(k in t for k in ["financial reporter", "financial reporting analyst", "financial reporting"]):
@@ -48,6 +63,25 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
             plan.fee_type = "Non-Billable"
         elif "billable" in t and "non-billable" not in t and "nonbillable" not in t:
             plan.fee_type = "Billable"
+
+    # PTO intent: treat PTO as a Task Type prefix (reliable in this dataset)
+    if "pto" in t and not plan.task_type:
+        plan.task_type = "PTO"
+
+    # Huddles intent ("Treewalk: Team Meetings - Huddles" contains this token)
+    if "huddles" in t and not plan.task_type:
+        plan.task_type = "Huddles"
+
+    # Yes/no questions for PTO/huddles should sum the filtered time, not total time.
+    if (t.startswith("did ") or " did " in t) and ("pto" in t or "huddles" in t):
+        plan.op = "sum"
+        plan.metric = plan.metric or "time_minutes"
+
+    # "What days/dates and how much time" should group by Date.
+    if ("what day" in t or "what days" in t or "what date" in t or "what dates" in t) and ("huddles" in t or "pto" in t):
+        plan.op = "group_sum"
+        plan.group_by = "Date"
+        plan.metric = plan.metric or "time_minutes"
 
     # Day-specific handling: if the user mentions an explicit date (e.g. "Feb 2nd 2026"),
     # force a single-day range [date, date+1) so we don't accidentally return the whole month.
@@ -142,7 +176,27 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
         "december": 12,
     }
     month_num = next((m for name, m in months.items() if name in t), None)
-    if month_num and not explicit_day:
+
+    # Two-month range like "January and February 2026"
+    two_month = re.search(
+        r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+and\s+"
+        r"(january|february|march|april|may|june|july|august|september|october|november|december)\s+(20\d{2})\b",
+        t,
+    )
+    if two_month and not explicit_day:
+        m1 = months.get(two_month.group(1), None)
+        m2 = months.get(two_month.group(2), None)
+        y = int(two_month.group(3))
+        if m1 and m2:
+            start_m = min(m1, m2)
+            end_m = max(m1, m2)
+            from datetime import datetime
+            start = datetime(y, start_m, 1)
+            end = datetime(y + 1, 1, 1) if end_m == 12 else datetime(y, end_m + 1, 1)
+            plan.from_ymd = start.date().isoformat()
+            plan.to_ymd = end.date().isoformat()
+
+    if month_num and not explicit_day and not two_month:
         import re
         from datetime import datetime
 
@@ -204,6 +258,19 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
 
     if plan.op == "distinct" and not plan.group_by:
         plan.group_by = "Team_Member"
+
+    # If user asks "how much time" / "how many hours" for a client over a period,
+    # prefer a sum rather than a monthly breakdown.
+    if (
+        ("how much time" in t or "how many hours" in t or "how many hour" in t)
+        and ("spent on" in t or "spend on" in t)
+        and plan.client
+        and plan.from_ymd
+        and plan.to_ymd
+        and plan.op in ("group_sum", "distinct", "list")
+    ):
+        plan.op = "sum"
+        plan.metric = plan.metric or "time_minutes"
 
     # group_sum/top/bottom need a metric; default to time for hours-style questions.
     if plan.op in ("group_sum", "top", "bottom") and not plan.metric:

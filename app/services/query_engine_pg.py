@@ -30,11 +30,21 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
     person = (plan.person or "").strip() or None
     client = (plan.client or "").strip() or None
 
-    # Normalize common client name misspellings to improve match reliability.
+    # Normalize common misspellings to improve match reliability.
     def _normalize_client_name(s: str) -> str:
         t = s.strip()
         # common typo seen in queries
         t = re.sub(r"\bdevelopement\b", "Development", t, flags=re.IGNORECASE)
+        return t
+
+    def _normalize_task_filter(s: str) -> str:
+        t = s.strip().strip('"').strip("'")
+        # Fix common spacing/typos
+        t = t.replace("Bookkeeping:", "Bookkeeping: ")
+        t = re.sub(r"\bcontinous\b", "Continuous", t, flags=re.IGNORECASE)
+        t = re.sub(r"\bbookeeping\b", "Bookkeeping", t, flags=re.IGNORECASE)
+        # collapse spaces
+        t = " ".join(t.split())
         return t
 
     if client:
@@ -42,6 +52,8 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
     work = (plan.work or "").strip() or None
     role = (plan.role or "").strip() or None
     task = (plan.task_type or "").strip() or None
+    if task:
+        task = _normalize_task_filter(task)
     fee_type_filter = (plan.fee_type or "").strip() or None
 
     def _count(col: str, op: str, val: str, extra_where_sql: str, extra_params: list):
@@ -126,8 +138,9 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
         where.append("team_member ILIKE %s")
         params.append(f"%{person}%")
     if client:
-        where.append("client = %s")
-        params.append(client)
+        # Case-insensitive partial match (clients often queried by short name)
+        where.append("client ILIKE %s")
+        params.append(f"%{client}%")
 
     # Excluding Treewalk logic
     q_text = (raw_text or "").lower()
@@ -193,10 +206,11 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                     try:
                         d0 = datetime.fromisoformat(from_ymd).date()
                         d1 = datetime.fromisoformat(to_ymd).date()
-                        if (d1.toordinal() - d0.toordinal()) == 1:
+                        day_span = (d1.toordinal() - d0.toordinal())
+                        if day_span == 1:
                             period = f" on {d0.isoformat()}"
                         else:
-                            y, mo, _ = from_ymd.split("-", 2)
+                            # Whole-month windows like [2026-01-01, 2026-03-01)
                             month_names = {
                                 "01": "January",
                                 "02": "February",
@@ -211,9 +225,20 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                                 "11": "November",
                                 "12": "December",
                             }
-                            mm = mo.zfill(2)
-                            if mm in month_names:
-                                period = f" in {month_names[mm]} {y}"
+                            if d0.day == 1 and d1.day == 1 and d0.year == d1.year:
+                                sm = str(d0.month).zfill(2)
+                                em = str((d1.month - 1) or 12).zfill(2)
+                                if sm in month_names and em in month_names:
+                                    if d1.month - d0.month == 2:
+                                        period = f" in {month_names[sm]} and {month_names[em]} {d0.year}"
+                                    else:
+                                        period = f" from {month_names[sm]} to {month_names[em]} {d0.year}"
+                            if not period:
+                                # Fallback to start month label
+                                y, mo, _ = from_ymd.split("-", 2)
+                                mm = mo.zfill(2)
+                                if mm in month_names:
+                                    period = f" in {month_names[mm]} {y}"
                     except Exception:
                         # Fallback to month label
                         y, mo, _ = from_ymd.split("-", 2)
@@ -247,14 +272,24 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
 
             if subject_parts:
                 subj = " for ".join(subject_parts) if len(subject_parts) > 1 else subject_parts[0]
+                q = (raw_text or "").lower()
+
+                # Yes/no phrasing for questions like "Did X book PTO..." or "Did X attend huddles..."
+                if (q.startswith("did ") or " did " in q) and ("pto" in q or "huddles" in q):
+                    if mins <= 0 or matched == 0:
+                        reply = f"No, {subj} did not log any {('PTO' if 'pto' in q else 'huddles')}{period}."
+                    else:
+                        reply = f"Yes, {subj} logged {dur} of {('PTO' if 'pto' in q else 'huddles')}{period}."
+
                 # Special phrasing for non-billable sums
-                if fee_type_filter and ("non" in fee_type_filter.lower() and "bill" in fee_type_filter.lower()):
+                elif fee_type_filter and ("non" in fee_type_filter.lower() and "bill" in fee_type_filter.lower()):
                     reply = f"{subj} had worked {dur} non billable hours{period}."
-                # Better grammar when user asks "how many hours did we spend on <client>"
-                elif client and ("did we spend" in (raw_text or "").lower() or "we spend" in (raw_text or "").lower()):
-                    # Avoid double punctuation if client ends with a period (e.g., "Inc.")
+
+                # Better grammar when user asks "how many hours did we spend on <client>" / "was spent on"
+                elif client and ("did we spend" in q or "we spend" in q or "spent on" in q or "was spent on" in q):
                     end = "" if str(client).strip().endswith(".") else "."
                     reply = f"We spent {dur} on {client}{period}{end}"
+
                 else:
                     reply = f"{subj} worked {dur}{period}."
             else:
@@ -378,6 +413,57 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
             if plan.metric == "cost":
                 return {"reply": "This dataset doesn’t include a cost field, so I can’t rank/group by cost.", "diagnostics": {"matched": matched}}
             metric_col = "time_minutes"
+
+            # Day: group by date
+            if gb == "Date":
+                extra = " AND date_ts IS NOT NULL" if where_sql else " WHERE date_ts IS NOT NULL"
+                cur.execute(
+                    f"SELECT date_ts::date AS day, COALESCE(SUM({metric_col}),0) as v "
+                    f"FROM {VIEW}{where_sql}{extra} "
+                    f"GROUP BY date_ts::date ORDER BY day ASC LIMIT %s",
+                    params + [plan.limit],
+                )
+                items = cur.fetchall()
+                if not items:
+                    return {"reply": "I couldn’t find anything matching that in the database.", "diagnostics": {"matched": matched}}
+
+                def fmt_dur(vmins: float) -> str:
+                    mins = int(round(float(vmins)))
+                    h, m = mins // 60, mins % 60
+                    return f"{h}h {m}m" if h and m else (f"{h}h" if h else f"{m}m")
+
+                lines = []
+                for i, (day, v) in enumerate(items, start=1):
+                    label = day.isoformat() if hasattr(day, "isoformat") else str(day)
+                    lines.append(f"{i}) {label} — {fmt_dur(v)}")
+
+                # Reuse the normal period label when possible
+                period = ""
+                try:
+                    if from_ymd and to_ymd and len(from_ymd) >= 10:
+                        y, mo, _ = from_ymd.split("-", 2)
+                        month_names = {
+                            "01": "January",
+                            "02": "February",
+                            "03": "March",
+                            "04": "April",
+                            "05": "May",
+                            "06": "June",
+                            "07": "July",
+                            "08": "August",
+                            "09": "September",
+                            "10": "October",
+                            "11": "November",
+                            "12": "December",
+                        }
+                        mm = mo.zfill(2)
+                        if mm in month_names:
+                            period = f" in {month_names[mm]} {y}"
+                except Exception:
+                    period = ""
+
+                title = f"Time by day{period}"
+                return {"reply": title + "\n" + "\n".join(lines), "diagnostics": {"matched": matched}}
 
             # Month: group by year-month (date_trunc)
             if gb == "Month":
