@@ -162,9 +162,9 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
         where.append("role ILIKE %s")
         params.append(f"%{role}%")
 
-    # Snapshot filters before task_type so percent can compute denominator without task filter
-    base_where = list(where)
-    base_params = list(params)
+    # Build a denominator filter set for percent queries (everything except task_type).
+    den_where = list(where)
+    den_params = list(params)
 
     if task:
         tnorm = _normalize_task_filter(task)
@@ -194,13 +194,20 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
             where.append("(fee_type ILIKE %s OR task_type ILIKE %s)")
             params.append("%Non-Billable%")
             params.append("Non-billable%")
+            den_where.append("(fee_type ILIKE %s OR task_type ILIKE %s)")
+            den_params.append("%Non-Billable%")
+            den_params.append("Non-billable%")
         else:
             where.append("fee_type ILIKE %s")
             params.append(f"%{fee_type_filter}%")
+            den_where.append("fee_type ILIKE %s")
+            den_params.append(f"%{fee_type_filter}%")
 
     if from_ymd and to_ymd:
         where.append("date_ts >= %s::timestamptz AND date_ts < %s::timestamptz")
         params.extend([from_ymd, to_ymd])
+        den_where.append("date_ts >= %s::timestamptz AND date_ts < %s::timestamptz")
+        den_params.extend([from_ymd, to_ymd])
 
     where_sql = " WHERE " + " AND ".join(where) if where else ""
 
@@ -215,11 +222,11 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                 return {"reply": "Tell me which task category you want a percentage for (e.g., bookkeeping, PTO, tax).", "diagnostics": {"matched": matched}}
 
             where_sql_num = " WHERE " + " AND ".join(where) if where else ""
-            where_sql_den = " WHERE " + " AND ".join(base_where) if base_where else ""
+            where_sql_den = " WHERE " + " AND ".join(den_where) if den_where else ""
 
             cur.execute(f"SELECT COALESCE(SUM(time_minutes),0) FROM {VIEW}{where_sql_num}", params)
             num = float(cur.fetchone()[0] or 0)
-            cur.execute(f"SELECT COALESCE(SUM(time_minutes),0) FROM {VIEW}{where_sql_den}", base_params)
+            cur.execute(f"SELECT COALESCE(SUM(time_minutes),0) FROM {VIEW}{where_sql_den}", den_params)
             den = float(cur.fetchone()[0] or 0)
 
             if den <= 0:
