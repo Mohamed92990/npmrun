@@ -75,7 +75,7 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
             plan.task_type = "Financial Reporting"
         elif "consulting" in t or "consultant" in t:
             plan.task_type = "Consulting"
-        elif "bookkeeping" in t or "bookkeeper" in t:
+        elif "bookkeeping" in t or "bookkeeper" in t or "bookeeping" in t:
             plan.task_type = "Bookkeeping"
         elif "payroll" in t:
             plan.task_type = "Payroll"
@@ -85,6 +85,11 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
             plan.task_type = "Payments"
         elif "huddles" in t or "townhall" in t or "townhalls" in t or "onboarding" in t or "offboarding" in t or "recruitment" in t or "resource allocation" in t or "training" in t:
             plan.task_type = "Treewalk"
+
+    # Percentage intent
+    if ("percent" in t or "percentage" in t or "%" in t) and plan.from_ymd and plan.to_ymd:
+        plan.op = "percent"
+        plan.metric = plan.metric or "time_minutes"
 
     # Yes/no questions for PTO/huddles should sum the filtered time, not total time.
     if (t.startswith("did ") or " did " in t) and ("pto" in t or "huddles" in t):

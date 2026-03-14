@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 Metric = Literal["time_minutes", "cost"]
-Op = Literal["sum", "distinct", "group_sum", "top", "bottom", "list"]
+Op = Literal["sum", "distinct", "group_sum", "top", "bottom", "list", "percent"]
 
 
 class QueryPlan(BaseModel):

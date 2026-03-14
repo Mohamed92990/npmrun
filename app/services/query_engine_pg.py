@@ -161,6 +161,11 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
     if role:
         where.append("role ILIKE %s")
         params.append(f"%{role}%")
+
+    # Snapshot filters before task_type so percent can compute denominator without task filter
+    base_where = list(where)
+    base_params = list(params)
+
     if task:
         tnorm = _normalize_task_filter(task)
         # Prefix-based category filter when caller uses a top-level category
@@ -203,6 +208,66 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
         # matched count
         cur.execute(f"SELECT COUNT(*) FROM {VIEW}{where_sql}", params)
         matched = cur.fetchone()[0]
+
+        if plan.op == "percent":
+            # numerator: with task filter; denominator: same filters without task filter
+            if not task:
+                return {"reply": "Tell me which task category you want a percentage for (e.g., bookkeeping, PTO, tax).", "diagnostics": {"matched": matched}}
+
+            where_sql_num = " WHERE " + " AND ".join(where) if where else ""
+            where_sql_den = " WHERE " + " AND ".join(base_where) if base_where else ""
+
+            cur.execute(f"SELECT COALESCE(SUM(time_minutes),0) FROM {VIEW}{where_sql_num}", params)
+            num = float(cur.fetchone()[0] or 0)
+            cur.execute(f"SELECT COALESCE(SUM(time_minutes),0) FROM {VIEW}{where_sql_den}", base_params)
+            den = float(cur.fetchone()[0] or 0)
+
+            if den <= 0:
+                return {"reply": "I couldn’t calculate a percentage because total time for that period was 0.", "diagnostics": {"matched": matched}}
+
+            pct = (num / den) * 100.0
+
+            def fmt_dur(mins_val: float) -> str:
+                mins_i = int(round(float(mins_val)))
+                h, m = mins_i // 60, mins_i % 60
+                return f"{h}h {m}m" if h and m else (f"{h}h" if h else f"{m}m")
+
+            # Period label reuse from sum
+            period_label = ""
+            try:
+                if from_ymd and to_ymd and len(from_ymd) >= 10:
+                    d0 = datetime.fromisoformat(from_ymd).date()
+                    d1 = datetime.fromisoformat(to_ymd).date()
+                    month_names = {
+                        "01": "January",
+                        "02": "February",
+                        "03": "March",
+                        "04": "April",
+                        "05": "May",
+                        "06": "June",
+                        "07": "July",
+                        "08": "August",
+                        "09": "September",
+                        "10": "October",
+                        "11": "November",
+                        "12": "December",
+                    }
+                    if d0.day == 1 and d1.day == 1 and d0.year == d1.year:
+                        sm = str(d0.month).zfill(2)
+                        em = str((d1.month - 1) or 12).zfill(2)
+                        if sm == em and sm in month_names:
+                            period_label = f" in {month_names[sm]} {d0.year}"
+            except Exception:
+                period_label = ""
+
+            cat = _normalize_task_filter(task)
+            if cat in {"Bookkeeping","Consulting","Financial Reporting","Non-billable","PTO","Payments","Payroll","Tax","Treewalk"}:
+                cat_label = cat.lower()
+            else:
+                cat_label = "that"
+
+            reply = f"{cat_label.capitalize()} was {pct:.1f}% of total time{period_label} ({fmt_dur(num)} of {fmt_dur(den)})."
+            return {"reply": reply, "diagnostics": {"matched": matched, "num_minutes": num, "den_minutes": den, "percent": pct}}
 
         if plan.op == "sum":
             if plan.metric == "cost":
