@@ -446,7 +446,7 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                             )
                             pairs = [(r[0], r[1]) for r in cur.fetchall() if r and r[0] and r[1]]
                             if pairs:
-                                note = "No managers found in March 2026. Latest managers were"
+                                note = "No managers found in that period. Latest managers were"
                                 pairs = sorted(set((str(a).strip(), str(b).strip()) for a, b in pairs))
                                 shown = pairs[: plan.limit]
                                 lines = [f"{i}) {name} — {r}" for i, (name, r) in enumerate(shown, start=1)]
@@ -461,12 +461,26 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                 shown = pairs[: plan.limit]
                 extra_n = max(0, len(pairs) - len(shown))
 
-                # Title with client + month if present
-                title = "Managers"
-                bits = []
+                # Title: do not mention dates unless the user mentioned them.
+                title = "The managers"
                 if client:
-                    bits.append(f"for {client}")
-                if from_ymd and to_ymd and len(from_ymd) >= 10:
+                    title += f" for {client} are"
+                else:
+                    title += " are"
+
+                # Include month/year only if the user asked with a date/month/year
+                include_period = False
+                try:
+                    q2 = (raw_text or "").lower()
+                    include_period = any(k in q2 for k in [
+                        "january","february","march","april","may","june","july","august","september","october","november","december",
+                        "2025","2026","2024","2023",
+                        "q1","q2","q3","q4",
+                    ])
+                except Exception:
+                    include_period = False
+
+                if include_period and from_ymd and len(from_ymd) >= 10:
                     try:
                         y, mo, _ = from_ymd.split("-", 2)
                         month_names = {
@@ -485,11 +499,9 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                         }
                         mm = mo.zfill(2)
                         if mm in month_names:
-                            bits.append(f"in {month_names[mm]} {y}")
+                            title += f" in {month_names[mm]} {y}"
                     except Exception:
                         pass
-                if bits:
-                    title += " " + " ".join(bits)
 
                 lines = [f"{i}) {name} — {r}" for i, (name, r) in enumerate(shown, start=1)]
                 reply = title + "\n" + "\n".join(lines)
