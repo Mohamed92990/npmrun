@@ -405,6 +405,58 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                     "diagnostics": {"matched": matched},
                 }
 
+            # Special case: "who is the manager" should return person + role title.
+            q = (raw_text or "").lower()
+            if gb == "Team_Member" and role and "manager" in role.lower() and ("who" in q and "manager" in q):
+                cur.execute(
+                    f"SELECT DISTINCT team_member, role FROM {VIEW}{where_sql} AND team_member IS NOT NULL AND role IS NOT NULL"
+                    if where_sql
+                    else f"SELECT DISTINCT team_member, role FROM {VIEW} WHERE team_member IS NOT NULL AND role IS NOT NULL",
+                    params,
+                )
+                pairs = [(r[0], r[1]) for r in cur.fetchall() if r and r[0] and r[1]]
+                if not pairs:
+                    return {"reply": "I couldn’t find anything matching that in the database.", "diagnostics": {"matched": matched}}
+                pairs = sorted(set((str(a).strip(), str(b).strip()) for a, b in pairs))
+                shown = pairs[: plan.limit]
+                extra_n = max(0, len(pairs) - len(shown))
+
+                # Title with client + month if present
+                title = "Managers"
+                bits = []
+                if client:
+                    bits.append(f"for {client}")
+                if from_ymd and to_ymd and len(from_ymd) >= 10:
+                    try:
+                        y, mo, _ = from_ymd.split("-", 2)
+                        month_names = {
+                            "01": "January",
+                            "02": "February",
+                            "03": "March",
+                            "04": "April",
+                            "05": "May",
+                            "06": "June",
+                            "07": "July",
+                            "08": "August",
+                            "09": "September",
+                            "10": "October",
+                            "11": "November",
+                            "12": "December",
+                        }
+                        mm = mo.zfill(2)
+                        if mm in month_names:
+                            bits.append(f"in {month_names[mm]} {y}")
+                    except Exception:
+                        pass
+                if bits:
+                    title += " " + " ".join(bits)
+
+                lines = [f"{i}) {name} — {r}" for i, (name, r) in enumerate(shown, start=1)]
+                reply = title + "\n" + "\n".join(lines)
+                if extra_n:
+                    reply += f"\nPlus {extra_n} more."
+                return {"reply": reply, "diagnostics": {"matched": matched, "count": len(pairs)}}
+
             cur.execute(
                 f"SELECT DISTINCT {col} FROM {VIEW}{where_sql} AND {col} IS NOT NULL"
                 if where_sql

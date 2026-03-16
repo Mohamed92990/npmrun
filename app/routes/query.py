@@ -270,6 +270,36 @@ def query(payload: NLQueryIn, x_webhook_secret: str | None = Header(default=None
             plan.op = "distinct"
             plan.group_by = "Work"
 
+    # Manager intent: answer from Role column, scoped to the most recent month for that client.
+    if ("who" in t and "manager" in t and plan.client):
+        plan.op = "distinct"
+        plan.group_by = "Team_Member"
+        # Force role filter to manager; DB matching will return titles like "Senior Manager of Financial Reporting".
+        plan.role = plan.role or "manager"
+        # If no date was provided, treat "current" as the latest month present for that client.
+        if not plan.from_ymd and not plan.to_ymd:
+            try:
+                from datetime import datetime, timedelta
+                from app.services.postgres_client import PostgresClient, load_pg_conn_info
+                from app.services.query_engine_pg import ENV_SUPABASE
+
+                conninfo = load_pg_conn_info(str(ENV_SUPABASE))
+                pg = PostgresClient(conninfo)
+                with pg.connect() as conn, conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT MAX(date_ts)::date FROM public.karbon_timesheets_typed WHERE client ILIKE %s",
+                        [f"%{plan.client}%"],
+                    )
+                    mx = cur.fetchone()[0]
+                if mx:
+                    # Look back 90 days from the latest entry for this client so we can find manager-role entries
+                    # even if the latest month doesn't include managers.
+                    start = mx - timedelta(days=90)
+                    plan.from_ymd = start.isoformat()
+                    plan.to_ymd = (mx + timedelta(days=1)).isoformat()
+            except Exception:
+                pass
+
     if "who" in t and plan.op == "list":
         # If they asked "who", listing rows is usually not what they want.
         plan.op = "distinct"
