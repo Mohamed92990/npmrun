@@ -416,7 +416,47 @@ def execute_plan_pg(plan: QueryPlan, raw_text: str = "") -> dict:
                 )
                 pairs = [(r[0], r[1]) for r in cur.fetchall() if r and r[0] and r[1]]
                 if not pairs:
+                    # Fallback: if the month has no manager rows, look back from latest activity for this client.
+                    try:
+                        cur.execute(
+                            f"SELECT MAX(date_ts)::date FROM {VIEW} WHERE client ILIKE %s",
+                            [f"%{client}%"],
+                        )
+                        mx = cur.fetchone()[0]
+                        if mx:
+                            # 90-day lookback from latest activity
+                            from datetime import timedelta
+
+                            fb_from = (mx - timedelta(days=90)).isoformat()
+                            fb_to = (mx + timedelta(days=1)).isoformat()
+
+                            fb_where = list(where)
+                            fb_params = list(params)
+                            # Replace date range params if present; else add them
+                            # Easiest: drop any existing date_ts clause for fallback query
+                            fb_where = [w for w in fb_where if "date_ts >=" not in w and "date_ts <" not in w]
+                            fb_params = [p for p in fb_params if p not in [from_ymd, to_ymd]]
+                            fb_where.append("date_ts >= %s::timestamptz AND date_ts < %s::timestamptz")
+                            fb_params.extend([fb_from, fb_to])
+
+                            fb_sql = " WHERE " + " AND ".join(fb_where) if fb_where else ""
+                            cur.execute(
+                                f"SELECT DISTINCT team_member, role FROM {VIEW}{fb_sql} AND team_member IS NOT NULL AND role IS NOT NULL",
+                                fb_params,
+                            )
+                            pairs = [(r[0], r[1]) for r in cur.fetchall() if r and r[0] and r[1]]
+                            if pairs:
+                                note = "No managers found in March 2026. Latest managers were"
+                                pairs = sorted(set((str(a).strip(), str(b).strip()) for a, b in pairs))
+                                shown = pairs[: plan.limit]
+                                lines = [f"{i}) {name} — {r}" for i, (name, r) in enumerate(shown, start=1)]
+                                reply = note + "\n" + "\n".join(lines)
+                                return {"reply": reply, "diagnostics": {"matched": matched, "count": len(pairs), "fallback_range": [fb_from, fb_to]}}
+                    except Exception:
+                        pass
+
                     return {"reply": "I couldn’t find anything matching that in the database.", "diagnostics": {"matched": matched}}
+
                 pairs = sorted(set((str(a).strip(), str(b).strip()) for a, b in pairs))
                 shown = pairs[: plan.limit]
                 extra_n = max(0, len(pairs) - len(shown))
